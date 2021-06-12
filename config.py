@@ -1,4 +1,2 @@
-TOKEN = '1263511910:AAFQnCAd5CVsh9rVAu6iQlWdGlPhAQ0VJ18'
-ID = '1w4pNNDp9U3dXRGbriB3cdhEN48_5n61HuwQ7NQ2qG-s'
-worker = '1354930511'
-
+TOKEN = '*********************************************' # token from @BotFather
+worker = '**********' # ID worker
