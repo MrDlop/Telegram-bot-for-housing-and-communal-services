@@ -4,7 +4,7 @@ Telegram bot for convenient communication of a person with housing and communal 
 
 # Settings
 
-config.py - File to store your token
+config.py - File to store your token and ID worker
 
 config.json - Google Sheets Connection File
 
