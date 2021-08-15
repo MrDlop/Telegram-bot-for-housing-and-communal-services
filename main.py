@@ -1,13 +1,14 @@
-import telebot
-import config
 import time
 import datetime
 from datetime import datetime
+import telebot
 import pyautogui
 import httplib2
 import apiclient.discovery
 from oauth2client.service_account import ServiceAccountCredentials
 import gspread
+from numba import njit
+import config
 
 # connecting to google tables
 url_text = 'https://www.googleapis.com/auth/spreadsheets'
@@ -107,36 +108,34 @@ keyboard_mc.row('Номера телефонов').add('График работ�
 
 
 # start
+@njit
 @bot.message_handler(commands=['start'])
-def start_message(message):
+def start(message):
     bot.send_message(message.chat.id, 'Здравствуйте, вы зашли в чат-бота от МойМКД.', reply_markup=keyboard_auto)
 
 
 # commands for communication
+@njit
 @bot.message_handler(content_types=['text'])
 # registration
-def manul(message):
+def reg(message):
     if message.text.lower() == 'вход':
         bot.send_message(message.from_user.id, 'Введите своё ФИО')
         bot.register_next_step_handler(message, two_q)
 
 
 def two_q(message):
-    global answers
-    answers = [message.text]
     send = bot.send_message(message.chat.id, 'Введите свой кадастровый номер')
-    bot.register_next_step_handler(send, three_q)
+    bot.register_next_step_handler(send, three_q, message.text)
 
 
-def three_q(message):
-    answers.append(message.text)
-    if len(answers[1]) > 15:
-        if not worksheet.findall(answers[0]):
+def three_q(message, two_q_mess):
+    if len(message.text) > 15:
+        if not worksheet.findall(two_q_mess):
             bot.send_message(message.from_user.id, 'Неверный адрес или ФИО', reply_markup=keyboard_auto)
             bot.register_next_step_handler(message, two_q)
         else:
-            global cell
-            cell = worksheet.find(answers[0])
+            cell = worksheet.find(two_q_mess)
             results = service.spreadsheets().values().batchGet(spreadsheetId=spreadsheetId,
                                                                ranges=["Лист1!B2:B240"],
                                                                valueRenderOption='FORMATTED_VALUE',
@@ -146,37 +145,36 @@ def three_q(message):
                                                               ranges=["Лист1!C%s" % cell.row],
                                                               valueRenderOption='FORMATTED_VALUE',
                                                               dateTimeRenderOption='FORMATTED_STRING').execute()
-            if int(any(any(answers[1] in s for s in i) for i in results['valueRanges'][0]['values'])) == 1 and int(
-                    any(any(answers[0] in s for s in i) for i in result['valueRanges'][0]['values'])) == 1:
+            if int(any(any(message.text in s for s in i) for i in results['valueRanges'][0]['values'])) == 1 and int(
+                    any(any(two_q_mess in s for s in i) for i in result['valueRanges'][0]['values'])) == 1:
                 service.spreadsheets().values().batchUpdate(spreadsheetId=spreadsheetId, body={
                     "valueInputOption": "USER_ENTERED",
                     "data": [
                         {"range": "Лист1!I%s:AA%s" % (cell.row, cell.row),
                          "majorDimension": "ROWS",
                          "values": [
-                             [message.chat.id, (wks.find(worksheet.cell(cell.row, 1).value)).row, '0', '0', answers[1],
+                             [message.chat.id, (wks.find(worksheet.cell(cell.row, 1).value)).row, '0', '0',
+                              message.text,
                               '0', '0', '0', '0', '0', '0', '0', '0', '0',
                               '0', '0', '0', '0', '0', ]]}
                     ]}).execute()
                 bot.send_message(message.chat.id, "Напишите номер(если не хотите, введите 1)")
-                bot.register_next_step_handler(message, phone)
+                bot.register_next_step_handler(message, phone, cell)
             else:
                 bot.send_message(message.from_user.id, 'Неверный адрес или ФИО.', reply_markup=keyboard_auto)
-                bot.register_next_step_handler(message, manul)
+                bot.register_next_step_handler(message, reg)
     else:
         bot.send_message(message.from_user.id, 'Неверный адрес или ФИО.', reply_markup=keyboard_auto)
-        bot.register_next_step_handler(message, manul)
+        bot.register_next_step_handler(message, reg)
 
 
-def phone(message):
-    answers.append(message.text)
-
+def phone(message, cell):
     service.spreadsheets().values().batchUpdate(spreadsheetId=spreadsheetId, body={
         "valueInputOption": "USER_ENTERED",
         "data": [
             {"range": "Лист1!L%s" % cell.row,
              "majorDimension": "ROWS",
-             "values": [[answers[2]]]}
+             "values": [[message.text]]}
         ]}).execute()
     bot.send_message(message.chat.id, mess1, reply_markup=keyboard)
     bot.register_next_step_handler(message, menu)
@@ -184,148 +182,146 @@ def phone(message):
 
 # main
 def menu(message):
-    if message.text.lower() == '📄 справка':
-        bot.send_message(message.chat.id, "Выберите интересующую информацию", reply_markup=reference_board)
-        bot.register_next_step_handler(message, reference)
-    elif message.text.lower() == '📅 новости':
-        bot.send_message(message.chat.id, "Выберите категорию запроса", reply_markup=news_board)
-        bot.register_next_step_handler(message, news)
-    elif message.text.lower() == '💬 чат дома':
-        user_hocha = wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 2).value
-        if user_hocha != "":
-            hocha = wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 2).value
-            hocha_but = telebot.types.InlineKeyboardButton(text='Чат дома', url=hocha)
-            keyboard_hocha = telebot.types.InlineKeyboardMarkup().add(hocha_but)
-            bot.send_message(message.chat.id, 'Для перехода нажмите на кнопку ниже', reply_markup=keyboard_hocha)
-            bot.register_next_step_handler(message, menu)
-        elif user_hocha == "":
-            # create chat
-            pyautogui.click(25, 47)  # menu
-            time.sleep(0.5)
-            pyautogui.click(128, 188)  # new group
-            time.sleep(0.5)
-            pyautogui.write(str(wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 1).value),
-                            interval=0.05)  # name
-            pyautogui.click(614, 587)  # next
-            time.sleep(0.1)
-            pyautogui.click(489, 365)  # add member
-            time.sleep(0.1)
-            pyautogui.click(606, 804)  # invite via link
-            time.sleep(0.1)
-            pyautogui.moveTo(935, 47)
-            time.sleep(0.3)
-            pyautogui.click()  # settings
-            time.sleep(0.5)
-            pyautogui.click(851, 162)  # управление группой
-            time.sleep(0.5)
-            pyautogui.click(469, 689)  # admin
-            time.sleep(0.5)
-            pyautogui.click(420, 805)  # new admin
-            time.sleep(0.5)
-            pyautogui.click(474, 424)  # additional admin
-            time.sleep(0.1)
-            pyautogui.click(454, 578)  # добавление админов
-            time.sleep(0.1)
-            pyautogui.click(595, 939)  # сохранить
-            time.sleep(0.3)
-            pyautogui.click(606, 803)  # закрыть
-            time.sleep(0.1)
-            pyautogui.click(470, 539)  # тип группы
-            time.sleep(0.1)
-            pyautogui.click(359, 637)  # копировать ссылку
-            time.sleep(0.1)
-            pyautogui.click(417, 652)  # создать ссылку
-            time.sleep(0.1)
-            pyautogui.click(605, 571)  # ок
-            time.sleep(0.1)
-            pyautogui.click(376, 655)  # копировать ссылку
-            time.sleep(0.1)
-            pyautogui.click(594, 721)  # сохранить
-            time.sleep(0.1)
-            pyautogui.click(598, 827)  # сохранить
-            time.sleep(0.1)
-            pyautogui.click(1446, 806)  # клик
-            time.sleep(0.5)
-            pyautogui.hotkey('ctrl', 'v')
-            time.sleep(0.1)
-            pyautogui.press('enter')  # переход на новую строку
-            time.sleep(0.1)
-            pyautogui.click(984, 562)  # файл
-            time.sleep(0.1)
-            pyautogui.click(1035, 647)  # сохранить
-            # Отправка ссылки на чат
-            hocha_1 = wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 2).value
-            hocha_but = telebot.types.InlineKeyboardButton(text='Чат дома', url=hocha_1)
-            keyboard_hocha = telebot.types.InlineKeyboardMarkup().add(hocha_but)
-            bot.send_message(message.chat.id, 'Для перехода нажмите на кнопку ниже', reply_markup=keyboard_hocha)
-            bot.register_next_step_handler(message, menu)
+    if message.text.lower() in (
+            "сдать показания счетчиков", '❗️оформить заявку о ', 'проблеме в адс', '💬 чат дома', '📅 новости',
+            '📄 справка'):
+        if message.text.lower() == '📄 справка':
+            bot.send_message(message.chat.id, "Выберите интересующую информацию", reply_markup=reference_board)
+            bot.register_next_step_handler(message, reference)
+        elif message.text.lower() == '📅 новости':
+            bot.send_message(message.chat.id, "Выберите категорию запроса", reply_markup=news_board)
+            bot.register_next_step_handler(message, news)
+        elif message.text.lower() == '💬 чат дома':
+            if wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 2).value != "":
+                house = wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 2).value
+                house_but = telebot.types.InlineKeyboardButton(text='Чат дома', url=house)
+                keyboard_house = telebot.types.InlineKeyboardMarkup().add(house_but)
+                bot.send_message(message.chat.id, 'Для перехода нажмите на кнопку ниже', reply_markup=keyboard_house)
+                bot.register_next_step_handler(message, menu)
+            else:
+                pyautogui.click(25, 47)  # menu
+                time.sleep(0.5)
+                pyautogui.click(128, 188)  # new group
+                time.sleep(0.5)
+                pyautogui.write(
+                    str(wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 1).value),
+                    interval=0.05)  # name
+                pyautogui.click(614, 587)  # next
+                time.sleep(0.1)
+                pyautogui.click(489, 365)  # add member
+                time.sleep(0.1)
+                pyautogui.click(606, 804)  # invite via link
+                time.sleep(0.1)
+                pyautogui.moveTo(935, 47)
+                time.sleep(0.3)
+                pyautogui.click()  # settings
+                time.sleep(0.5)
+                pyautogui.click(851, 162)  # управление группой
+                time.sleep(0.5)
+                pyautogui.click(469, 689)  # admin
+                time.sleep(0.5)
+                pyautogui.click(420, 805)  # new admin
+                time.sleep(0.5)
+                pyautogui.click(474, 424)  # additional admin
+                time.sleep(0.1)
+                pyautogui.click(454, 578)  # добавление админов
+                time.sleep(0.1)
+                pyautogui.click(595, 939)  # сохранить
+                time.sleep(0.3)
+                pyautogui.click(606, 803)  # закрыть
+                time.sleep(0.1)
+                pyautogui.click(470, 539)  # тип группы
+                time.sleep(0.1)
+                pyautogui.click(359, 637)  # копировать ссылку
+                time.sleep(0.1)
+                pyautogui.click(417, 652)  # создать ссылку
+                time.sleep(0.1)
+                pyautogui.click(605, 571)  # ок
+                time.sleep(0.1)
+                pyautogui.click(376, 655)  # копировать ссылку
+                time.sleep(0.1)
+                pyautogui.click(594, 721)  # сохранить
+                time.sleep(0.1)
+                pyautogui.click(598, 827)  # сохранить
+                time.sleep(0.1)
+                pyautogui.click(1446, 806)  # клик
+                time.sleep(0.5)
+                pyautogui.hotkey('ctrl', 'v')
+                time.sleep(0.1)
+                pyautogui.press('enter')  # переход на новую строку
+                time.sleep(0.1)
+                pyautogui.click(984, 562)  # файл
+                time.sleep(0.1)
+                pyautogui.click(1035, 647)  # сохранить
+                # Отправка ссылки на чат
+                house_1 = wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 2).value
+                house_but = telebot.types.InlineKeyboardButton(text='Чат дома', url=house_1)
+                keyboard_house = telebot.types.InlineKeyboardMarkup().add(house_but)
+                bot.send_message(message.chat.id, 'Для перехода нажмите на кнопку ниже', reply_markup=keyboard_house)
+                bot.register_next_step_handler(message, menu)
 
-    elif message.text.lower() == '❗️оформить заявку о проблеме в адс':
-        bot.send_message(message.chat.id, "Подробно опишите проблему")
-        bot.register_next_step_handler(message, ads_1)
-    elif message.text.lower() == "сдать показания счетчиков":
-        global day1
-        global days
-        global days2
-        global day
-        now = datetime.now()
-        day_now = now.day
-        if day_now == day:
-            month = now.month
-            year = now.year
-            if month == 1 or month == 3 or month == 5 or month == 7 or month == 8 or month == 10 or month == 12:
-                days = 10
-                days2 = '10'
-            elif month == 4 or month == 6 or month == 9 or month == 11:
-                days = 9
-                days2 = '9'
-            elif month == 2:
-                if year % 4 == 0:
-                    days = 8
-                    days2 = '8'
-                else:
-                    days = 7
-                    days2 = '7'
-            bot.send_message(message.from_user.id, mess5,
-                             reply_markup=keyboard16)
-            bot.register_next_step_handler(message, meter_reading)
-        elif day_now == day1:
-            bot.send_message(message.from_user.id, mess5,
-                             reply_markup=keyboard16)
-            bot.register_next_step_handler(message, meter_reading)
-        else:
-            bot.send_message(message.from_user.id, "Эта функция работает только в дни сдачи показаний счетчиков!",
-                             reply_markup=keyboard_qwe)
-            bot.register_next_step_handler(message, exit5)
-    elif message.text.lower() != "сдать показания счетчиков" and message.text.lower() != '❗️оформить заявку о ' \
-                                                                                         'проблеме в адс' and \
-            message.text.lower() != '💬 чат дома' and message.text.lower() != '📅 новости' and message.text.lower() \
-            != '📄 справка' and message.text.lower() != '📄 справка':
+        elif message.text.lower() == '❗️оформить заявку о проблеме в адс':
+            bot.send_message(message.chat.id, "Подробно опишите проблему")
+            bot.register_next_step_handler(message, edc_1)
+        elif message.text.lower() == "сдать показания счетчиков":
+            global day1, days, days2, day
+            now = datetime.now()
+            day_now = now.day
+            if day_now == day:
+                month = now.month
+                year = now.year
+                if month in (1, 3, 5, 7, 8, 10, 12):
+                    days = 10
+                    days2 = '10'
+                elif month in (4, 6, 9, 11):
+                    days = 9
+                    days2 = '9'
+                elif month == 2:
+                    if year % 4 == 0:
+                        days = 8
+                        days2 = '8'
+                    else:
+                        days = 7
+                        days2 = '7'
+                bot.send_message(message.from_user.id, mess5,
+                                 reply_markup=keyboard16)
+                bot.register_next_step_handler(message, meter_reading)
+            elif day_now == day1:
+                bot.send_message(message.from_user.id, mess5,
+                                 reply_markup=keyboard16)
+                bot.register_next_step_handler(message, meter_reading)
+            else:
+                bot.send_message(message.from_user.id, "Эта функция работает только в дни сдачи показаний счетчиков!",
+                                 reply_markup=keyboard_qwe)
+                bot.register_next_step_handler(message, exit5)
+    else:
         bot.register_next_step_handler(message, menu)
 
 
-def ads_1(message):
+def edc_1(message):
     bot.send_message(config.worker, message.from_user.username)
     bot.send_message(config.worker, message.text)
     bot.send_message(message.chat.id, "Выберете в каком виде вы прикрепите доказательства", reply_markup=ask_board)
-    bot.register_next_step_handler(message, adc_0)
+    bot.register_next_step_handler(message, eds_0)
 
 
-def adc_0(message):
-    if message.text.lower() == 'фото':
-        bot.send_message(message.chat.id, "Пришлите фото")
-        bot.register_next_step_handler(message, adc_photo)
-    elif message.text.lower() == 'отсутствует':
-        bot.send_message(message.chat.id, "Для устранения ложных вызовов мы просим вас добавить док-ва, используйте "
-                                          "данную функцию снова и прикрепите док-ва для того, что бы ваша заявка была"
-                                          " отправлена")
-        bot.send_message(message.chat.id, mess1, reply_markup=keyboard)
-        bot.register_next_step_handler(message, menu)
-    elif message.text.lower() != 'отсутствует' and message.text.lower() != 'фото':
-        bot.register_next_step_handler(message, adc_0)
+def eds_0(message):
+    if message.text.lower() in ('отсутствует', 'фото'):
+        if message.text.lower() == 'фото':
+            bot.send_message(message.chat.id, "Пришлите фото")
+            bot.register_next_step_handler(message, eds_photo)
+        elif message.text.lower() == 'отсутствует':
+            bot.send_message(message.chat.id,
+                             "Для устранения ложных вызовов мы просим вас добавить док-ва, используйте "
+                             "данную функцию снова и прикрепите док-ва для того, что бы ваша заявка была"
+                             " отправлена")
+            bot.send_message(message.chat.id, mess1, reply_markup=keyboard)
+            bot.register_next_step_handler(message, menu)
+    else:
+        bot.register_next_step_handler(message, eds_0)
 
 
-def adc_photo(message):
+def eds_photo(message):
     ant = message.photo[0].file_id
     bot.send_photo(config.worker, ant)
     bot.send_message(message.chat.id, "Ваша заявка была отправлена модератору")
@@ -334,62 +330,60 @@ def adc_photo(message):
 
 
 def news(message):
-    if message.text.lower() == 'о предстоящем ремонте':
-        bot.send_message(message.chat.id,
-                         wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 4).value)
-        bot.register_next_step_handler(message, news)
-    elif message.text.lower() == 'результаты работ':
-        bot.send_message(message.chat.id,
-                         wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 5).value)
-        bot.register_next_step_handler(message, news)
-    elif message.text.lower() == 'просьбы убрать авто и т.д.':
-        bot.send_message(message.chat.id,
-                         wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 6).value)
-        bot.register_next_step_handler(message, news)
-    elif message.text.lower() == 'опросы':
-        bot.send_message(message.chat.id, "Выберите опрос", reply_markup=poll_board)
-        bot.register_next_step_handler(message, poll)
-    elif message.text.lower() == 'назад':
-        bot.send_message(message.chat.id, mess1, reply_markup=keyboard)
-        bot.register_next_step_handler(message, menu)
-    elif message.text.lower() != 'о предстоящем ремонте' and message.text.lower() != 'результаты работ' and \
-            message.text.lower() != 'просьбы убрать авто и т.д.' and \
-            message.text.lower() != 'опросы' and message.text.lower() != 'назад':
+    if message.text.lower() in ('о предстоящем ремонте', 'результаты работ', 'просьбы убрать авто и т.д.',
+                                'опросы', 'назад'):
+        if message.text.lower() == 'о предстоящем ремонте':
+            bot.send_message(message.chat.id,
+                             wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 4).value)
+            bot.register_next_step_handler(message, news)
+        elif message.text.lower() == 'результаты работ':
+            bot.send_message(message.chat.id,
+                             wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 5).value)
+            bot.register_next_step_handler(message, news)
+        elif message.text.lower() == 'просьбы убрать авто и т.д.':
+            bot.send_message(message.chat.id,
+                             wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 6).value)
+            bot.register_next_step_handler(message, news)
+        elif message.text.lower() == 'опросы':
+            bot.send_message(message.chat.id, "Выберите опрос", reply_markup=poll_board)
+            bot.register_next_step_handler(message, poll)
+        elif message.text.lower() == 'назад':
+            bot.send_message(message.chat.id, mess1, reply_markup=keyboard)
+            bot.register_next_step_handler(message, menu)
+    else:
         bot.register_next_step_handler(message, news)
 
 
 # функции от meter_reading до gas_meter2 для работы со счетчиками
 def meter_reading(message):
-    if message.text.lower() == 'счетчик электроэнергии':
-        meter_h(message, message.chat.id, 14, electricity_meter1)
+    if message.text.lower() in ('счетчик электроэнергии', 'счетчик горячей воды', 'счетчик холодной воды',
+                                'счетчик горячей воды(2)', 'счетчик холодной воды(2)', 'счетчик горячей воды(3)',
+                                'счетчик газа', 'назад'):
+        if message.text.lower() == 'счетчик электроэнергии':
+            meter_h(message, message.chat.id, 14, electricity_meter1)
 
-    elif message.text.lower() == 'счетчик горячей воды':
-        meter_h(message, message.chat.id, 15, hot_water_meter1)
+        elif message.text.lower() == 'счетчик горячей воды':
+            meter_h(message, message.chat.id, 15, hot_water_meter1)
 
-    elif message.text.lower() == 'счетчик холодной воды':
-        meter_h(message, message.chat.id, 16, cold_water_meter1)
+        elif message.text.lower() == 'счетчик холодной воды':
+            meter_h(message, message.chat.id, 16, cold_water_meter1)
 
-    elif message.text.lower() == 'счетчик горячей воды(2)':
-        meter_h(message, message.chat.id, 17, hot_water2_meter1)
+        elif message.text.lower() == 'счетчик горячей воды(2)':
+            meter_h(message, message.chat.id, 17, hot_water2_meter1)
 
-    elif message.text.lower() == 'счетчик холодной воды(2)':
-        meter_h(message, message.chat.id, 18, cold_water2_meter1)
+        elif message.text.lower() == 'счетчик холодной воды(2)':
+            meter_h(message, message.chat.id, 18, cold_water2_meter1)
 
-    elif message.text.lower() == 'счетчик горячей воды(3)':
-        meter_h(message, message.chat.id, 19, hot_water3_meter1)
+        elif message.text.lower() == 'счетчик горячей воды(3)':
+            meter_h(message, message.chat.id, 19, hot_water3_meter1)
 
-    elif message.text.lower() == 'счетчик газа':
-        meter_h(message, message.chat.id, 20, gas_meter1)
+        elif message.text.lower() == 'счетчик газа':
+            meter_h(message, message.chat.id, 20, gas_meter1)
 
-    elif message.text.lower() == 'назад':
-        bot.send_message(message.chat.id, mess1, reply_markup=keyboard)
-        bot.register_next_step_handler(message, menu)
-
-    elif message.text.lower() != 'счетчик электроэнергии' and message.text.lower() != 'счетчик горячей воды' and \
-            message.text.lower() != 'счетчик холодной воды' and message.text.lower() != 'счетчик горячей воды(2)' and \
-            message.text.lower() != 'счетчик холодной воды(2)' and \
-            message.text.lower() != 'счетчик горячей воды(3)' and \
-            message.text.lower() != 'счетчик газа' and message.text.lower() != 'назад':
+        elif message.text.lower() == 'назад':
+            bot.send_message(message.chat.id, mess1, reply_markup=keyboard)
+            bot.register_next_step_handler(message, menu)
+    else:
         bot.register_next_step_handler(message, meter_reading)
 
 
@@ -458,15 +452,15 @@ def gas_meter2(message):
     meters_h2(message, message.from_user.id, message.chat.id, message.text, 24, 6.31)
 
 
-def meter_h(message, id, str_A, f2):
-    if worksheet.cell(worksheet.find(str(id)).row, str_A).value == 0:
+def meter_h(message, id_user, str_A, f2):
+    if worksheet.cell(worksheet.find(str(id_user)).row, str_A).value == 0:
         if days == 1:
             bot.send_message(message.chat.id, "У вас остался {0} день".format(days2), reply_markup=keyboard8)
         elif days == 2 or days == 3 or days == 4:
             bot.send_message(message.chat.id, "У вас остался {0} дня".format(days2), reply_markup=keyboard8)
         else:
-            bot.send_message(id, "У вас осталось {0} дней".format(days2), reply_markup=keyboard8)
-        bot.send_message(id, mess2)
+            bot.send_message(id_user, "У вас осталось {0} дней".format(days2), reply_markup=keyboard8)
+        bot.send_message(id_user, mess2)
         bot.register_next_step_handler(message, f2)
     else:
         if days == 1:
@@ -474,119 +468,121 @@ def meter_h(message, id, str_A, f2):
         elif days == 2 or days == 3 or days == 4:
             bot.send_message(message.chat.id, "У вас остался {0} дня".format(days2), reply_markup=keyboard8)
         else:
-            bot.send_message(id, "У вас осталось {0} дней".format(days2), reply_markup=keyboard8)
-        bot.send_message(id, mess3)
+            bot.send_message(id_user, "У вас осталось {0} дней".format(days2), reply_markup=keyboard8)
+        bot.send_message(id_user, mess3)
         bot.register_next_step_handler(message, f2)
 
 
-def meters_h(message, id, friId, text, str_A, str_B, f2):
+def meters_h(message, id_user, friId, text, str_A, str_B, f2):
     if message.text.lower() == 'отмена':
         bot.send_message(friId, mess5,
                          reply_markup=keyboard16)
         bot.register_next_step_handler(message, meter_reading)
     elif message.text.lower() != 'отмена':
-        if int(worksheet.cell(worksheet.find(str(id)).row, str_A).value) == 0:
-            worksheet.update_cell(worksheet.find(str(id)).row, str_B, text)
-            worksheet.update_cell(worksheet.find(str(id)).row, str_A, '1')
+        if int(worksheet.cell(worksheet.find(str(id_user)).row, str_A).value) == 0:
+            worksheet.update_cell(worksheet.find(str(id_user)).row, str_B, text)
+            worksheet.update_cell(worksheet.find(str(id_user)).row, str_A, '1')
             bot.send_message(friId, mess6)
             bot.register_next_step_handler(message, f2)
         elif message.text:
-            worksheet.update_cell(worksheet.find(str(id)).row, str_B,
-                                  worksheet.cell(worksheet.find(str(id)).row,
+            worksheet.update_cell(worksheet.find(str(id_user)).row, str_B,
+                                  worksheet.cell(worksheet.find(str(id_user)).row,
                                                  str_B).value + '/' + text)
             bot.send_message(friId, mess4, reply_markup=keyboard_qwe)
             bot.register_next_step_handler(message, exit5)
 
 
-def meters_h2(message, friId, id, text, str_A, n):
+def meters_h2(message, friId, id_user, text, str_A, n):
     if text:
-        worksheet.update_cell(worksheet.find(str(id)).row, str_A,
-                              worksheet.cell(worksheet.find(str(id)).row, str_A).value + '|' + text)
+        worksheet.update_cell(worksheet.find(str(id_user)).row, str_A,
+                              worksheet.cell(worksheet.find(str(id_user)).row, str_A).value + '|' + text)
         bot.send_message(friId, mess4, reply_markup=keyboard_qwe)
 
-        money = worksheet.cell(worksheet.find(str(id)).row, str_A).value.split("|")
+        money = worksheet.cell(worksheet.find(str(id_user)).row, str_A).value.split("|")
         c = (int(money[1]) - int(money[0])) * n
         bot.send_message(friId, "Вам нужно заплатить {0} рублей".format(str(c)), reply_markup=keyboard_qwe)
         bot.register_next_step_handler(message, exit5)
 
 
 def reference(message):
-    if message.text.lower() == '🏢 о доме':
-        bot.send_message(message.chat.id,
-                         wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 3).value)
-        bot.register_next_step_handler(message, reference)
-    elif message.text.lower() == '📃 контактная информация':
-        bot.send_message(message.chat.id, 'Выберите подкатегорию', reply_markup=keyboard_mc)
-        bot.register_next_step_handler(message, mc)
-    elif message.text.lower() == 'об ук':
-        bot.send_message(message.chat.id, wdfs.cell(
-            wdfs.find(wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 8).value).row,
-            6).value)
-        bot.register_next_step_handler(message, reference)
-    elif message.text.lower() == 'назад':
-        bot.send_message(message.chat.id, mess1, reply_markup=keyboard)
-        bot.register_next_step_handler(message, menu)
-    elif message.text.lower() != '🏢 о доме' and message.text.lower() != '📃 контактная информация' and \
-            message.text.lower() != 'об ук' and message.text.lower() != 'назад':
+    if message.text.lower() in ('🏢 о доме', '📃 контактная информация', 'об ук', 'назад'):
+        if message.text.lower() == '🏢 о доме':
+            bot.send_message(message.chat.id,
+                             wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 3).value)
+            bot.register_next_step_handler(message, reference)
+        elif message.text.lower() == '📃 контактная информация':
+            bot.send_message(message.chat.id, 'Выберите подкатегорию', reply_markup=keyboard_mc)
+            bot.register_next_step_handler(message, mc)
+        elif message.text.lower() == 'об ук':
+            bot.send_message(message.chat.id, wdfs.cell(
+                wdfs.find(wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 8).value).row,
+                6).value)
+            bot.register_next_step_handler(message, reference)
+        elif message.text.lower() == 'назад':
+            bot.send_message(message.chat.id, mess1, reply_markup=keyboard)
+            bot.register_next_step_handler(message, menu)
+    else:
         bot.register_next_step_handler(message, reference)
 
 
 def mc(message):
-    if message.text.lower() == 'номера телефонов':
-        bot.send_message(message.chat.id, wdfs.cell(
-            wdfs.find(wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 8).value).row,
-            2).value)
-        bot.register_next_step_handler(message, mc)
-    elif message.text.lower() == 'график работы':
-        bot.send_message(message.chat.id, wdfs.cell(
-            wdfs.find(wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 8).value).row,
-            3).value)
-        bot.register_next_step_handler(message, mc)
-    elif message.text.lower() == 'прайс на дополнительные услуги':
-        bot.send_message(message.chat.id, wdfs.cell(
-            wdfs.find(wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 8).value).row,
-            4).value)
-        bot.register_next_step_handler(message, mc)
-    elif message.text.lower() == 'часы приема':
-        bot.send_message(message.chat.id, wdfs.cell(
-            wdfs.find(wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 8).value).row,
-            5).value)
-        bot.register_next_step_handler(message, mc)
-    elif message.text.lower() == 'назад':
-        bot.send_message(message.chat.id, "Выберите интересующую информацию", reply_markup=reference_board)
-        bot.register_next_step_handler(message, reference)
-    elif message.text.lower() != 'номера телефонов' and message.text.lower() != 'график работы' and \
-            message.text.lower() != 'прайс на дополнительные услуги' and \
-            message.text.lower() != 'часы приема' and message.text.lower() != 'назад':
+    if message.text.lower() in ('номера телефонов', 'график работы', 'прайс на дополнительные услуги',
+                                'часы приема', 'назад'):
+        if message.text.lower() == 'номера телефонов':
+            bot.send_message(message.chat.id, wdfs.cell(
+                wdfs.find(wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 8).value).row,
+                2).value)
+            bot.register_next_step_handler(message, mc)
+        elif message.text.lower() == 'график работы':
+            bot.send_message(message.chat.id, wdfs.cell(
+                wdfs.find(wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 8).value).row,
+                3).value)
+            bot.register_next_step_handler(message, mc)
+        elif message.text.lower() == 'прайс на дополнительные услуги':
+            bot.send_message(message.chat.id, wdfs.cell(
+                wdfs.find(wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 8).value).row,
+                4).value)
+            bot.register_next_step_handler(message, mc)
+        elif message.text.lower() == 'часы приема':
+            bot.send_message(message.chat.id, wdfs.cell(
+                wdfs.find(wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 8).value).row,
+                5).value)
+            bot.register_next_step_handler(message, mc)
+        elif message.text.lower() == 'назад':
+            bot.send_message(message.chat.id, "Выберите интересующую информацию", reply_markup=reference_board)
+            bot.register_next_step_handler(message, reference)
+    else:
         bot.register_next_step_handler(message, mc)
 
 
 def poll(message):
-    if message.text.lower() == 'опрос 1':
-        question = wks.cell(wks.find('опрос1').row, 14).value
-        opti = wks.row_values(wks.find('опрос1').row)
-        del opti[0:15]
-        bot.send_message(message.chat.id, str(question) + '\nВарианты Ответов\n' + "\n".join(opti), reply_markup=poll_1)
-        bot.register_next_step_handler(message, poll1)
-    elif message.text.lower() == 'опрос 2':
-        question = wks.cell(wks.find('опрос2').row, 14).value
-        opti = wks.row_values(wks.find('опрос2').row)
-        del opti[0:15]
-        bot.send_message(message.chat.id, str(question) + '\nВарианты Ответов\n' + "\n".join(opti), reply_markup=poll_1)
-        bot.register_next_step_handler(message, poll2)
+    if message.text.lower() in ('опрос 1', 'опрос 2', 'опрос 3', 'назад'):
+        if message.text.lower() == 'опрос 1':
+            question = wks.cell(wks.find('опрос1').row, 14).value
+            opti = wks.row_values(wks.find('опрос1').row)
+            del opti[0:15]
+            bot.send_message(message.chat.id, str(question) + '\nВарианты Ответов\n' + "\n".join(opti),
+                             reply_markup=poll_1)
+            bot.register_next_step_handler(message, poll1)
+        elif message.text.lower() == 'опрос 2':
+            question = wks.cell(wks.find('опрос2').row, 14).value
+            opti = wks.row_values(wks.find('опрос2').row)
+            del opti[0:15]
+            bot.send_message(message.chat.id, str(question) + '\nВарианты Ответов\n' + "\n".join(opti),
+                             reply_markup=poll_1)
+            bot.register_next_step_handler(message, poll2)
 
-    elif message.text.lower() == 'опрос 3':
-        question = wks.cell(wks.find('опрос3').row, 14).value
-        opti = wks.row_values(wks.find('опрос3').row)
-        del opti[0:15]
-        bot.send_message(message.chat.id, str(question) + '\nВарианты Ответов\n' + "\n".join(opti), reply_markup=poll_1)
-        bot.register_next_step_handler(message, poll3)
-    elif message.text.lower() == 'назад':
-        bot.send_message(message.chat.id, "Выберите категорию запроса", reply_markup=news_board)
-        bot.register_next_step_handler(message, news)
-    elif message.text.lower() != 'опрос 1' and message.text.lower() != 'опрос 2' and \
-            message.text.lower() != 'опрос 3' and \
-            message.text.lower() != 'назад':
+        elif message.text.lower() == 'опрос 3':
+            question = wks.cell(wks.find('опрос3').row, 14).value
+            opti = wks.row_values(wks.find('опрос3').row)
+            del opti[0:15]
+            bot.send_message(message.chat.id, str(question) + '\nВарианты Ответов\n' + "\n".join(opti),
+                             reply_markup=poll_1)
+            bot.register_next_step_handler(message, poll3)
+        elif message.text.lower() == 'назад':
+            bot.send_message(message.chat.id, "Выберите категорию запроса", reply_markup=news_board)
+            bot.register_next_step_handler(message, news)
+    else:
         bot.register_next_step_handler(message, poll)
 
 
@@ -602,16 +598,16 @@ def poll3(message):
     poll_all(message, message.text, message.chat.id, poll3, 'опрос3')
 
 
-def poll_all(message, text, id, function, txt):
+def poll_all(message, text, id_user, function, txt):
     opti = wks.row_values(wks.find(txt).row)
     del opti[0:15]
     if opti.count(text) == 1:
         wks.update_cell(int(wks.find(txt).row + 1), int(opti.index(text) + 16),
                         int(wks.cell(wks.find(txt).row + 1, opti.index(text) + 16).value) + 1)
-        bot.send_message(id, "Выберите опрос", reply_markup=poll_board)
+        bot.send_message(id_user, "Выберите опрос", reply_markup=poll_board)
         bot.register_next_step_handler(message, poll)
     elif message.text.lower() == 'назад':
-        bot.send_message(id, "Выберите опрос", reply_markup=poll_board)
+        bot.send_message(id_user, "Выберите опрос", reply_markup=poll_board)
         bot.register_next_step_handler(message, poll)
     elif message.text.lower() != 'назад' and opti.count(text) != 1:
         bot.register_next_step_handler(message, function)
