@@ -4,10 +4,9 @@ from datetime import datetime
 import telebot
 import pyautogui
 import httplib2
-import apiclient.discovery
+from apiclient import discovery
 from oauth2client.service_account import ServiceAccountCredentials
 import gspread
-from numba import njit
 import config
 
 # connecting to google tables
@@ -16,7 +15,7 @@ url_text_1 = 'https://www.googleapis.com/auth/drive'
 CREDENTIALS_FILE = 'config.json'
 credentials = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, [url_text, url_text_1])
 httpAuth = credentials.authorize(httplib2.Http())
-service = apiclient.discovery.build('sheets', 'v4', http=httpAuth)
+service = discovery.build('sheets', 'v4', http=httpAuth)
 spreadsheetId = config.ID
 
 # setting up work with google tables
@@ -108,34 +107,31 @@ keyboard_mc.row('Номера телефонов').add('График работ�
 
 
 # start
-@njit
 @bot.message_handler(commands=['start'])
 def start(message):
     bot.send_message(message.chat.id, 'Здравствуйте, вы зашли в чат-бота от МойМКД.', reply_markup=keyboard_auto)
 
 
 # commands for communication
-@njit
 @bot.message_handler(content_types=['text'])
-# registration
-def reg(message):
+def input_fullname(message):
     if message.text.lower() == 'вход':
         bot.send_message(message.from_user.id, 'Введите своё ФИО')
-        bot.register_next_step_handler(message, two_q)
+        bot.register_next_step_handler(message, input_cadastral_number)
 
 
-def two_q(message):
+def input_cadastral_number(message):
     send = bot.send_message(message.chat.id, 'Введите свой кадастровый номер')
-    bot.register_next_step_handler(send, three_q, message.text)
+    bot.register_next_step_handler(send, login, message.text)
 
 
-def three_q(message, two_q_mess):
+def login(message, cadastral_number):
     if len(message.text) > 15:
-        if not worksheet.findall(two_q_mess):
+        if not worksheet.findall(cadastral_number):
             bot.send_message(message.from_user.id, 'Неверный адрес или ФИО', reply_markup=keyboard_auto)
-            bot.register_next_step_handler(message, two_q)
+            bot.register_next_step_handler(message, input_fullname)
         else:
-            cell = worksheet.find(two_q_mess)
+            cell = worksheet.find(cadastral_number)
             results = service.spreadsheets().values().batchGet(spreadsheetId=spreadsheetId,
                                                                ranges=["Лист1!B2:B240"],
                                                                valueRenderOption='FORMATTED_VALUE',
@@ -146,7 +142,7 @@ def three_q(message, two_q_mess):
                                                               valueRenderOption='FORMATTED_VALUE',
                                                               dateTimeRenderOption='FORMATTED_STRING').execute()
             if int(any(any(message.text in s for s in i) for i in results['valueRanges'][0]['values'])) == 1 and int(
-                    any(any(two_q_mess in s for s in i) for i in result['valueRanges'][0]['values'])) == 1:
+                    any(any(cadastral_number in s for s in i) for i in result['valueRanges'][0]['values'])) == 1:
                 service.spreadsheets().values().batchUpdate(spreadsheetId=spreadsheetId, body={
                     "valueInputOption": "USER_ENTERED",
                     "data": [
@@ -162,10 +158,10 @@ def three_q(message, two_q_mess):
                 bot.register_next_step_handler(message, phone, cell)
             else:
                 bot.send_message(message.from_user.id, 'Неверный адрес или ФИО.', reply_markup=keyboard_auto)
-                bot.register_next_step_handler(message, reg)
+                bot.register_next_step_handler(message, input_fullname)
     else:
         bot.send_message(message.from_user.id, 'Неверный адрес или ФИО.', reply_markup=keyboard_auto)
-        bot.register_next_step_handler(message, reg)
+        bot.register_next_step_handler(message, input_fullname)
 
 
 def phone(message, cell):
@@ -182,9 +178,12 @@ def phone(message, cell):
 
 # main
 def menu(message):
-    if message.text.lower() in (
-            "сдать показания счетчиков", '❗️оформить заявку о ', 'проблеме в адс', '💬 чат дома', '📅 новости',
-            '📄 справка'):
+    if message.text.lower() in ('сдать показания счетчиков',
+                                '❗️оформить заявку о ',
+                                'проблеме в адс',
+                                '💬 чат дома',
+                                '📅 новости',
+                                '📄 справка'):
         if message.text.lower() == '📄 справка':
             bot.send_message(message.chat.id, "Выберите интересующую информацию", reply_markup=reference_board)
             bot.register_next_step_handler(message, reference)
@@ -192,13 +191,7 @@ def menu(message):
             bot.send_message(message.chat.id, "Выберите категорию запроса", reply_markup=news_board)
             bot.register_next_step_handler(message, news)
         elif message.text.lower() == '💬 чат дома':
-            if wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 2).value != "":
-                house = wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 2).value
-                house_but = telebot.types.InlineKeyboardButton(text='Чат дома', url=house)
-                keyboard_house = telebot.types.InlineKeyboardMarkup().add(house_but)
-                bot.send_message(message.chat.id, 'Для перехода нажмите на кнопку ниже', reply_markup=keyboard_house)
-                bot.register_next_step_handler(message, menu)
-            else:
+            if wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 2).value == "":
                 pyautogui.click(25, 47)  # menu
                 time.sleep(0.5)
                 pyautogui.click(128, 188)  # new group
@@ -253,12 +246,11 @@ def menu(message):
                 pyautogui.click(984, 562)  # файл
                 time.sleep(0.1)
                 pyautogui.click(1035, 647)  # сохранить
-                # Отправка ссылки на чат
-                house_1 = wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 2).value
-                house_but = telebot.types.InlineKeyboardButton(text='Чат дома', url=house_1)
-                keyboard_house = telebot.types.InlineKeyboardMarkup().add(house_but)
-                bot.send_message(message.chat.id, 'Для перехода нажмите на кнопку ниже', reply_markup=keyboard_house)
-                bot.register_next_step_handler(message, menu)
+            house = wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 2).value
+            house_but = telebot.types.InlineKeyboardButton(text='Чат дома', url=house)
+            keyboard_house = telebot.types.InlineKeyboardMarkup().add(house_but)
+            bot.send_message(message.chat.id, 'Для перехода нажмите на кнопку ниже', reply_markup=keyboard_house)
+            bot.register_next_step_handler(message, menu)
 
         elif message.text.lower() == '❗️оформить заявку о проблеме в адс':
             bot.send_message(message.chat.id, "Подробно опишите проблему")
@@ -330,8 +322,11 @@ def eds_photo(message):
 
 
 def news(message):
-    if message.text.lower() in ('о предстоящем ремонте', 'результаты работ', 'просьбы убрать авто и т.д.',
-                                'опросы', 'назад'):
+    if message.text.lower() in ('о предстоящем ремонте',
+                                'результаты работ',
+                                'просьбы убрать авто и т.д.',
+                                'опросы',
+                                'назад'):
         if message.text.lower() == 'о предстоящем ремонте':
             bot.send_message(message.chat.id,
                              wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 4).value)
@@ -356,8 +351,12 @@ def news(message):
 
 # функции от meter_reading до gas_meter2 для работы со счетчиками
 def meter_reading(message):
-    if message.text.lower() in ('счетчик электроэнергии', 'счетчик горячей воды', 'счетчик холодной воды',
-                                'счетчик горячей воды(2)', 'счетчик холодной воды(2)', 'счетчик горячей воды(3)',
+    if message.text.lower() in ('счетчик электроэнергии',
+                                'счетчик горячей воды',
+                                'счетчик холодной воды',
+                                'счетчик горячей воды(2)',
+                                'счетчик холодной воды(2)',
+                                'счетчик горячей воды(3)',
                                 'счетчик газа', 'назад'):
         if message.text.lower() == 'счетчик электроэнергии':
             meter_h(message, message.chat.id, 14, electricity_meter1)
@@ -453,24 +452,17 @@ def gas_meter2(message):
 
 
 def meter_h(message, id_user, str_A, f2):
+    word1, word2 = "осталось", "дней"
+    if days == 1:
+        word1, word2 = "остался", "день"
+    elif days == 2 or days == 3 or days == 4:
+        word1, word2 = "осталось", "дня"
+    bot.send_message(id_user, f"У вас {word1} {days2} {word2}", reply_markup=keyboard8)
     if worksheet.cell(worksheet.find(str(id_user)).row, str_A).value == 0:
-        if days == 1:
-            bot.send_message(message.chat.id, "У вас остался {0} день".format(days2), reply_markup=keyboard8)
-        elif days == 2 or days == 3 or days == 4:
-            bot.send_message(message.chat.id, "У вас остался {0} дня".format(days2), reply_markup=keyboard8)
-        else:
-            bot.send_message(id_user, "У вас осталось {0} дней".format(days2), reply_markup=keyboard8)
         bot.send_message(id_user, mess2)
-        bot.register_next_step_handler(message, f2)
     else:
-        if days == 1:
-            bot.send_message(message.chat.id, "У вас остался {0} день".format(days2), reply_markup=keyboard8)
-        elif days == 2 or days == 3 or days == 4:
-            bot.send_message(message.chat.id, "У вас остался {0} дня".format(days2), reply_markup=keyboard8)
-        else:
-            bot.send_message(id_user, "У вас осталось {0} дней".format(days2), reply_markup=keyboard8)
         bot.send_message(id_user, mess3)
-        bot.register_next_step_handler(message, f2)
+    bot.register_next_step_handler(message, f2)
 
 
 def meters_h(message, id_user, friId, text, str_A, str_B, f2):
@@ -500,12 +492,15 @@ def meters_h2(message, friId, id_user, text, str_A, n):
 
         money = worksheet.cell(worksheet.find(str(id_user)).row, str_A).value.split("|")
         c = (int(money[1]) - int(money[0])) * n
-        bot.send_message(friId, "Вам нужно заплатить {0} рублей".format(str(c)), reply_markup=keyboard_qwe)
+        bot.send_message(friId, f"Вам нужно заплатить {c} рублей", reply_markup=keyboard_qwe)
         bot.register_next_step_handler(message, exit5)
 
 
 def reference(message):
-    if message.text.lower() in ('🏢 о доме', '📃 контактная информация', 'об ук', 'назад'):
+    if message.text.lower() in ('🏢 о доме',
+                                '📃 контактная информация',
+                                'об ук',
+                                'назад'):
         if message.text.lower() == '🏢 о доме':
             bot.send_message(message.chat.id,
                              wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 3).value)
@@ -526,8 +521,11 @@ def reference(message):
 
 
 def mc(message):
-    if message.text.lower() in ('номера телефонов', 'график работы', 'прайс на дополнительные услуги',
-                                'часы приема', 'назад'):
+    if message.text.lower() in ('номера телефонов',
+                                'график работы',
+                                'прайс на дополнительные услуги',
+                                'часы приема',
+                                'назад'):
         if message.text.lower() == 'номера телефонов':
             bot.send_message(message.chat.id, wdfs.cell(
                 wdfs.find(wks.cell(worksheet.cell(worksheet.find(str(message.chat.id)).row, 10).value, 8).value).row,
